@@ -19,12 +19,13 @@ setwd(this.path::here())
 
 #read in the parsed data and metadata
 gc_data1 <- read.csv("../02_parsed_data/OD_11_10_23_long.csv", header=TRUE)
-gc_meta1 <- read.csv("05_metadata/plate_meta_11_10_23.csv")
+gc_meta1 <- read.csv("../05_metadata/plate_meta_11_16_2023.csv")
 
+#remove time column
 gc_data1 <- gc_data1[,-1]
 
 #add a column for time
-gc_data1$time<-0:228 #number of rows minus 1 bc 0 is the first time value
+gc_data1$time<-0:192 #number of rows minus 1 bc 0 is the first time value
 gc_data1$time <- 15*(gc_data1$time) # readings every 5 min starting at min 0
 
 #Convert the "time" column from min to hours
@@ -37,37 +38,57 @@ gc_data1[gc_data1 < 0] <- 0
 gc_data1_long <- melt(gc_data1, id=c("time"))
 gc_data1_long$value <- as.numeric(gc_data1_long$value)
 
+#remove wells that were empty
+gc_data1_long_filt <- gc_data1_long %>%
+  filter(variable %in% gc_meta1$Wells)
+
 #visualize growth curves
-ggplot(gc_data1_long, aes(x=time, y=value)) + geom_point(alpha=0.5, size=.05) + theme_classic() +xlab("Time (hours)") + ylab("Bacterial Growth OD Plate 1 (2/1/23)")
+ggplot(gc_data1_long_filt, aes(x=time, y=value)) + geom_point(alpha=0.5, size=.05) + theme_classic() +xlab("Time (hours)") + ylab("Bacterial Growth OD Plate 1 (Nov23)")
 
 #filter data to look at negative controls
-gc1_blanks <- gc_data1.t_long[gc_data1.t_long$variable == c("C09", "D09", "E09", "F09", "G09", "H09", "C10", "D10", "E10", "F10", "G10", "H10"),]
-ggplot(gc1_blanks, aes(x=time, y=value, color=variable)) + geom_point(alpha=0.5, size=.5) + theme_classic() +xlab("Time (hours)") + ylab("Bacterial Growth OD") + ggtitle("Growth Curve for Blanks Plate 1 (2/1/23)") + geom_smooth()
+meta_blank <- gc_meta1 %>% filter(tube_id == "blank")
+gc_data1_blanks <- gc_data1_long_filt %>%
+  filter(variable %in% meta_blank$Wells)
+
+ggplot(gc_data1_blanks, aes(x=time, y=value, color=variable)) + 
+  geom_point(alpha=0.5, size=.5) + theme_classic() +xlab("Time (hours)") + 
+  ylab("Bacterial Growth OD") + 
+  ggtitle("Growth Curve for Blanks Plate 1 (Nov23)")
+
+#looks like G8 was contaminated
 
 ### Let's try growthcurver to analyze the data
-#Fits the data to a logistic function dan calculates standard metrics like k(carrying capacity), N0(starting population), r(growthrate)
-gc_data1.t <- as.data.frame(sapply(gc_data1.t, as.numeric))
+#Fits the data to a logistic function and calculates standard metrics like k(carrying capacity), N0(starting population), r(growthrate)
 
-#remove blanks by column name
-gc_data1.t_noblanks <- gc_data1.t[ , !names(gc_data1.t) %in% 
-      c("C09","C10","D09", "D10", "E09", "E10", "F09", "F10","G09", "G10", "H09", "H10")]
+#filter meta data to remove negative controls
+gcmeta_noblank <- gc_meta1 %>% filter(tube_id != "blank")
+
+#filter wide data to match the samples above (no empty wells or blanks)
+df_noblanks <- gc_data1 %>%
+  select(intersect(names(.), gcmeta_noblank$Wells))
+
+#convert data to numeric
+df_noblanks <- as.data.frame(sapply(df_noblanks, as.numeric))
+
+#isolate time column from original data
+time <- gc_data1[,97]
+
+#bind time column to our filtered dataframe in wide format
+df_noblanks <- cbind(df_noblanks, time)
 
 #uses data in wide format not long
-gc_out1 <- SummarizeGrowthByPlate(gc_data1.t_noblanks, plot_fit = FALSE)
-
+gc_out1 <- SummarizeGrowthByPlate(df_noblanks, plot_fit = FALSE)
 
 #Look at summary info and save as a txt
-gc_file1 <- "04_R_data_output/microbial_growth_metrics_02_01_2023.csv"
+gc_file1 <- "../04_R_data_output/microbial_growth_metrics_Nov_2023.csv"
 write.table(gc_out1, file = gc_file1, 
             quote = FALSE, sep = ",", row.names = FALSE)
-
 
 #Look for normal distribution
 hist(gc_out1$sigma, main = "Histogram of sigma values", xlab = "sigma")
 
 # convert to dataframe for pca analysis
 pca1_gc_out <- as_tibble(gc_out1)
-
 
 # Prepare the gc_out data for the PCA
 rownames(pca1_gc_out) <- pca1_gc_out$sample
@@ -86,30 +107,28 @@ as_data_frame(list(PC1=pca1.res$x[,1],
 
 #Combine growth metric data with the metadata
 gm1 <- merge(gc_out1, gc_meta1, by.x= "sample", by.y= "Wells")
-
 gm1 <- gm1 %>% arrange(tube_id)
-
 gm1$tube_id <- as.factor(gm1$tube_id)
 
 
+
+######## STOP HERE
+#there is a problem with the tube_id, it should be the same for the samples across rep 1, 2, 3
+
+
 #ANOVA to look for differences in reps within tube_id
-anova_growth_r_rep <- aov(r ~ tube_id*rep, data= gm_all)
-summary(anova_growth_r_rep) #no differences
+anova_growth_r_rep <- aov(r ~ tube_id*rep, data= gm1)
+anova_growth_r_rep #no differences
 
 dev.off()
-ggplot(gm_all, aes(x = rep, y = r, label = tube_id)) + geom_text() +
+ggplot(gm1, aes(x = rep, y = r, label = tube_id)) + geom_text() +
   geom_boxplot(outlier.shape = NA) +  geom_point() + 
   facet_grid(~tube_id) + 
   theme_classic() + ylab("Growth Rate") + xlab("Rep by Tube ID")
-#generally see agreement between reps
-#16 has one rep high (over 1) = will filter this 
-#23, 25, 26,  has two clusters low and high = will leave these and average
 
-#remove outlier for #16
-gm_all <- gm_all[-106,]
 
 # aggregate and find mean for each bacterial isolate
-gsum <- gm_all %>% group_by(tube_id) %>% 
+gsum <- gm1 %>% group_by(tube_id) %>% 
   mutate(., r.mean = mean(r))
 
 gsum <- gsum %>% group_by(tube_id) %>% 
